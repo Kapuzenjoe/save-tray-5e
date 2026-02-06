@@ -142,7 +142,6 @@ async function attachSaveParticipantsToMessage(message, targets, meta = {}) {
  */
 function onRenderChatMessage(message, html) {
   const data = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-  console.log(message)
   if (!data?.participants?.length) return;
 
   const content = html?.querySelector?.(".message-content");
@@ -283,7 +282,6 @@ async function rollSaveFromTray(message, actorUuid, event) {
   if (!ability) return;
 
   const actor = await fromUuid(actorUuid);
-  console.log(actor)
   if (!actor?.rollSavingThrow) return;
 
   const config = {
