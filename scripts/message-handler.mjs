@@ -24,10 +24,10 @@ async function onPostUseActivity(activity, usageConfig, results) {
   if (!srcMsg) return;
 
   const targets = Array.from(game.user?.targets ?? []);
-  if (!targets) return;
+  if (!targets.length) return;
 
-  const dc = activity?.save?.dc?.value ?? 0
-  const ability = [...activity?.save.ability][0] ?? null;
+  const dc = activity?.save?.dc?.value ?? null;
+  const ability = activity?.save?.ability ? [...activity.save.ability][0] : null;
 
   await attachSaveParticipantsToMessage(srcMsg, targets, { dc, ability });
 }
@@ -59,6 +59,7 @@ async function onRollSavingThrow(rolls, data) {
   if (!actor) return;
 
   const token = actor?.token?.object ?? actor?.getActiveTokens?.()[0] ?? null;
+  if (!token) return;
 
   const total = Number.isFinite(roll.total) ? roll.total : null;
   if (total === null) return;
@@ -99,7 +100,7 @@ async function attachSaveParticipantsToMessage(message, targets, meta = {}) {
     const uuid = actor?.uuid;
     if (!uuid) continue;
 
-    const name = tokenDoc.name
+    const name = tokenDoc.name ?? actor.name;
     const prior = participantsByUuid.get(uuid);
 
     const total = Number.isFinite(meta.total)
@@ -141,80 +142,83 @@ async function attachSaveParticipantsToMessage(message, targets, meta = {}) {
  * @param {HTMLElement} html        HTML contents of the message
  */
 function onRenderChatMessage(message, html) {
-  const data = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-  if (!data?.participants?.length) return;
-
   const content = html?.querySelector?.(".message-content");
   if (!content) return;
 
-  content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
+  const data = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
+  if (data?.participants?.length) {
 
-  const tray = document.createElement("div");
-  tray.classList.add("save-tray-5e", "card-tray", "collapsible");
+    content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
 
-  const label = document.createElement("label");
-  label.classList.add("roboto-upper");
-  label.innerHTML = `
-    <i class="fas fa-shield-halved" inert></i>
-    <span>Saving Throw</span>
-    <i class="fas fa-caret-down" inert></i>
-  `;
+    const tray = document.createElement("div");
+    tray.classList.add("save-tray-5e", "card-tray", "collapsible");
 
-  const body = document.createElement("div");
-  body.classList.add("collapsible-content");
-
-  const ul = document.createElement("ul");
-  ul.classList.add("unlist", "evaluation", "wrapper");
-
-  for (const p of data.participants) {
-    const li = document.createElement("li");
-    li.classList.add("target");
-    li.dataset.saveUuid = p.uuid ?? "";
-
-    const hasResult = Number.isFinite(p.total);
-
-    const icon =
-      hasResult ? (p.success === true ? "fa-check" : p.success === false ? "fa-times" : "fa-minus") : "fa-minus";
-
-    const iconClass =
-      hasResult && p.success === true ? "save-tray-5e-success" :
-        hasResult && p.success === false ? "save-tray-5e-failure" :
-          "";
-
-    li.innerHTML = `
-      <i class="fas ${icon} ${iconClass}" inert></i>
-      <div class="name"></div>
-      <div class="ac">${hasResult ? p.total : ""}</div>
+    const label = document.createElement("label");
+    label.classList.add("roboto-upper");
+    label.innerHTML = `
+      <i class="fa-solid fa-shield-heart" inert></i>
+      <span>${game.i18n.localize("DND5E.SavingThrow")}</span>
+      <i class="fas fa-caret-down" inert></i>
     `;
 
-    li.querySelector(".name").textContent = p.name ?? "Unknown";
+    const body = document.createElement("div");
+    body.classList.add("collapsible-content");
 
-    const right = li.querySelector(".ac");
-    if (hasResult) {
-      right.innerHTML = `<span>${p.total}</span>`;
-    } else {
-      const actor = fromUuidSync(p.uuid);
-      const canRoll = game.user.isGM || actor?.isOwner;
+    const ul = document.createElement("ul");
+    ul.classList.add("unlist", "evaluation", "wrapper");
 
-      right.innerHTML = canRoll
-        ? `
-          <button type="button" class="save-tray-5e-roll" data-save-uuid="${p.uuid}">
-            <i class="fas fa-dice-d20" inert></i>
-          </button>
-        `
-        : "";
+    for (const p of data.participants) {
+      const li = document.createElement("li");
+      li.classList.add("target");
+      li.dataset.saveUuid = p.uuid ?? "";
+
+      const hasResult = Number.isFinite(p.total);
+
+      const icon =
+        hasResult ? (p.success === true ? "fa-check" : p.success === false ? "fa-times" : "fa-minus") : "fa-minus";
+
+      const iconClass =
+        hasResult && p.success === true ? "save-tray-5e-success" :
+          hasResult && p.success === false ? "save-tray-5e-failure" :
+            "";
+
+      li.innerHTML = `
+        <i class="fas ${icon} ${iconClass}" inert></i>
+        <div class="name"></div>
+        <div class="ac">${hasResult ? p.total : ""}</div>
+      `;
+
+      li.querySelector(".name").textContent = p.name ?? game.i18n.localize("DND5E.Unknown");
+
+      const right = li.querySelector(".ac");
+      if (hasResult) {
+        right.innerHTML = ` <i class="fa-solid fa-shield-heart" inert></i> <span>${p.total}</span>`;
+      } else {
+        const actor = fromUuidSync(p.uuid);
+        const canRoll = game.user.isGM || actor?.isOwner;
+
+        right.innerHTML = canRoll
+          ? `
+            <button type="button" class="save-tray-5e-roll" data-save-uuid="${p.uuid}">
+              <i class="fas fa-dice-d20" inert></i>
+            </button>
+          `
+          : "";
+      }
+
+      ul.appendChild(li);
     }
 
-    ul.appendChild(li);
+    body.appendChild(ul);
+    tray.appendChild(label);
+    tray.appendChild(body);
+
+    content.appendChild(tray);
+    activateInteractions(message, ul);
+    activateSaveRollButtons(message, ul);
+    activateDamageTargetSync(message, content);
   }
-
-  body.appendChild(ul);
-  tray.appendChild(label);
-  tray.appendChild(body);
-
-  content.appendChild(tray);
-  activateInteractions(message, ul);
-  activateSaveRollButtons(message, ul);
+  activateDamageMultiplierPreset(message, html);
 }
 
 /**
@@ -301,4 +305,101 @@ async function rollSaveFromTray(message, actorUuid, event) {
   };
 
   await actor.rollSavingThrow(config, dialog, messageData);
+}
+
+/**
+ * Ensure damage buttons on the originating chat message use save tray participants as user targets.
+ *
+ * @param {ChatMessage} message
+ * @param {HTMLElement} html
+ */
+function activateDamageTargetSync(message, html) {
+  if (!game.settings.get(MODULE_ID, "damageChat")) return;
+
+  const buttons = html.querySelectorAll("button[data-action]");
+
+  for (const btn of buttons) {
+    const action = btn.dataset.action;
+    if (action !== "rollDamage" && action !== "rollDamageCritical") continue;
+
+    if (btn.dataset.saveTrayTargets === "1") continue;
+    btn.dataset.saveTrayTargets = "1";
+
+    btn.addEventListener(
+      "click",
+      () => {
+        const data = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
+        const participants = data?.participants ?? [];
+        if (!participants.length) return;
+
+        const actorUuids = new Set(participants.map(p => p.uuid));
+        if (!actorUuids.size) return;
+
+        const tokenIds = [];
+        for (const token of canvas.tokens.placeables) {
+          const uuid = token.actor?.uuid;
+          if (uuid && actorUuids.has(uuid)) tokenIds.push(token.id);
+        }
+        if (tokenIds.length) canvas.tokens.setTargets(tokenIds, { mode: "replace" });
+      },
+      { capture: true }
+    );
+  }
+}
+
+/**
+ * Preset damage multipliers for save successes in the damage application UI.
+ * Resolves save data from the originating message (if present).
+ *
+ * @param {ChatMessage5e} message
+ * @param {HTMLElement} html
+ */
+function activateDamageMultiplierPreset(message, html) {
+  if (!game.settings.get(MODULE_ID, "damageChat")) return;
+
+  const app = html.querySelector("damage-application");
+  if (!app) return;
+
+  const originId = message.getFlag?.("dnd5e", "originatingMessage");
+  const sourceMessage = originId ? game.messages?.get?.(originId) : message;
+
+  const data = sourceMessage?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
+  if (!data?.participants?.length) return;
+
+  const roll = message.getFlag?.("dnd5e", "roll") ?? {};
+  const { damageOnSave } = roll;
+
+  const multiplierValue = damageOnSave === "none" ? "0" : damageOnSave === "half" ? "0.5" : null;
+  if (!multiplierValue) return;
+
+  const successUuids = data.participants.filter(p => p.success === true).map(p => p.uuid);
+  if (!successUuids.length) return;
+
+  const applyPreset = () => {
+    const rows = app.querySelectorAll('li.target[data-target-uuid]');
+    if (!rows.length) return false;
+
+    for (const row of rows) {
+      const actorUuid = row.dataset.targetUuid;
+      if (!actorUuid) continue;
+
+      if (!actorUuid || !successUuids.includes(actorUuid)) continue;
+
+      const button = row.querySelector(`button.multiplier-button[value="${multiplierValue}"]`);
+      if (!button) continue;
+      if (button.getAttribute("aria-pressed") === "true") continue;
+
+      button.click();
+    }
+
+    return true;
+  };
+
+  if (applyPreset()) return;
+
+  const observer = new MutationObserver(() => {
+    if (applyPreset()) observer.disconnect();
+  });
+
+  observer.observe(app, { childList: true, subtree: true });
 }

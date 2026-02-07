@@ -1,0 +1,10 @@
+{
+    "SAVE_TRAY_5E": {
+        "Settings": {
+            "damageChat": {
+                "name": "Enhanced Damage Chat Messages",
+                "hint": "Automatically targets Save Tray participants for damage rolls and presets damage multipliers based on save results (e.g., half or none on save)."
+            }
+        }
+    }
+}
