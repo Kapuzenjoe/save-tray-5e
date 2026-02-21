@@ -5,5 +5,8 @@ import { initSaveTray } from "./message-handler.mjs"
 Hooks.once("init", () => {
   initSettings();
   initQueries();
+});
+
+Hooks.once("ready", () => {
   initSaveTray();
 });

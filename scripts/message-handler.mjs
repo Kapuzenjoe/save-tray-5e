@@ -7,7 +7,14 @@ import { setFlagViaGM } from "./queries.mjs";
 export function initSaveTray() {
   Hooks.on("dnd5e.postUseActivity", onPostUseActivity);
   Hooks.on("dnd5e.rollSavingThrow", onRollSavingThrow);
-  Hooks.on("dnd5e.renderChatMessage", onRenderChatMessage);
+  if (!foundry.utils.isNewerVersion("5.3.0", game.system.version)) {
+    Hooks.on("renderChatMessageHTML", onRenderChatMessage);
+  }
+  else {
+    Hooks.on("dnd5e.renderChatMessage", onRenderChatMessage);
+  }
+  Hooks.on("dnd5e.renderChatMessage", activateDamageMultiplierPreset);
+  console.log(`[${MODULE_ID}] is ready`)
 }
 
 /**
@@ -146,10 +153,9 @@ function onRenderChatMessage(message, html) {
   if (!content) return;
 
   const data = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-  if (data?.participants?.length) {
+  if (!data?.participants?.length) return;
 
-    content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
-
+  const buildTray = () => {
     const tray = document.createElement("div");
     tray.classList.add("save-tray-5e", "card-tray", "collapsible");
 
@@ -213,12 +219,36 @@ function onRenderChatMessage(message, html) {
     tray.appendChild(label);
     tray.appendChild(body);
 
-    content.appendChild(tray);
+    return { tray, ul };
+  };
+
+  const applyTray = () => {
+    content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
+    const { tray, ul } = buildTray();
+
+    if (message?.type === "usage") {
+      const wrapper = content.querySelector(":scope > div");
+      if (!wrapper || wrapper.classList.contains("chat-card")) return false;
+
+      wrapper.appendChild(tray);
+    }
+    else {
+      content.appendChild(tray);
+    }
+
     activateInteractions(message, ul);
     activateSaveRollButtons(message, ul);
     activateDamageTargetSync(message, content);
+    return true;
   }
-  activateDamageMultiplierPreset(message, html);
+
+  if (applyTray()) return;
+
+  const observer = new MutationObserver(() => {
+    if (applyTray()) observer.disconnect();
+  });
+
+  observer.observe(content, { childList: true, subtree: true });
 }
 
 /**
