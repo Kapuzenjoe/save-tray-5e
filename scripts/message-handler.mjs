@@ -165,7 +165,9 @@ function onRenderChatMessage(message, html) {
           <div class="ac"></div>
         `;
 
-      li.querySelector(".name").textContent = p.name ?? game.i18n.localize("DND5E.Unknown");
+      const isHideNPCNamesActive = game.modules?.get?.("hide-npc-names")?.active === true;
+      const actorName = isHideNPCNamesActive && game?.hnn ? game.hnn.getReplacementInfo(actor).displayName : p.name;
+      li.querySelector(".name").textContent = actorName ?? game.i18n.localize("DND5E.Unknown");
 
       const right = li.querySelector(".ac");
       if (hasResult) {

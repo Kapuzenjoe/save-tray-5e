@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.3.1
+
+- Added compatibility with the "Hide NPC Names" mod. Thanks to @ddbrown30. (#3)
+
 ## Version 0.3.0
 
 - Compatibility with DnD5e 5.3.0.
