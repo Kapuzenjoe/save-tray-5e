@@ -10,11 +10,14 @@ import {
 } from "./message-helper.mjs";
 
 /**
- * Register hooks.
+ * Register the chat-related hooks used by the save tray.
+ *
+ * @returns {void}
  */
 export function readySaveTray() {
   Hooks.on("dnd5e.postUseActivity", onPostUseActivity);
   Hooks.on("dnd5e.rollSavingThrow", onRollSavingThrow);
+  // Usage messages rendered through system.getHTML still bypass dnd5e.renderChatMessage in dnd5e 5.3.x.
   if (!foundry.utils.isNewerVersion("5.3.0", game.system.version)) {
     Hooks.on("renderChatMessageHTML", onRenderChatMessage);
   }
@@ -26,16 +29,24 @@ export function readySaveTray() {
   console.log(`[${MODULE_ID}] is ready`)
 }
 
+/**
+ * Register initialization-time hooks used by the save tray.
+ *
+ * @returns {void}
+ */
 export function initSaveTray() {
   Hooks.on("getChatMessageContextOptions", onGetChatMessageContextOptions);
 }
 
 /**
- * Fires when an activity is activated.
- * 
+ * Attach save tray participants when a save activity is used.
+ *
+ * @function dnd5e.postUseActivity
+ * @memberof hookEvents
  * @param {Activity} activity                     Activity being used.
  * @param {ActivityUseConfiguration} usageConfig  Configuration info for the activation.
  * @param {ActivityUsageResults} results          Final details on the activation.
+ * @returns {Promise<void>}
  */
 async function onPostUseActivity(activity, usageConfig, results) {
   if (activity?.type !== "save") return;
@@ -47,18 +58,21 @@ async function onPostUseActivity(activity, usageConfig, results) {
   if (!targets.length) return;
 
   const dc = activity?.save?.dc?.value ?? null;
-  const ability = activity?.save?.ability ? [...activity.save.ability][0] : null;
+  const ability = activity?.save?.ability?.first?.() ?? null;
 
   await attachSaveParticipantsToMessage(srcMsg, targets, { dc, ability });
 }
 
 /**
- * A hook event that fires after a save has been rolled.	
- * 
+ * Attach a save result to its originating tray message after the save is rolled.
+ *
+ * @function dnd5e.rollSavingThrow
+ * @memberof hookEvents
  * @param {D20Roll[]} rolls       The resulting rolls.
- * @param {object} data
+ * @param {object} data           Roll metadata.
  * @param {string} data.ability   ID of the ability that was rolled as defined in CONFIG.DND5E.abilities.
- * @param {Actor5e} data.subject  Actor for which the hit die has been rolled.
+ * @param {Actor5e} data.subject  Actor for which the saving throw has been rolled.
+ * @returns {Promise<void>}
  */
 async function onRollSavingThrow(rolls, data) {
   const roll = rolls?.[0];
@@ -67,12 +81,9 @@ async function onRollSavingThrow(rolls, data) {
   const rollMsg = roll.parent;
   if (!rollMsg) return;
 
-  const srcMessageId =
-    rollMsg.getFlag?.("dnd5e", "originatingMessage");
-
-  if (!srcMessageId) return;
-
-  const srcMsg = game.messages?.get?.(srcMessageId);
+  const srcMsg =
+    rollMsg.getOriginatingMessage?.()
+    ?? game.messages?.get?.(rollMsg.getFlag?.("dnd5e", "originatingMessage"));
   if (!srcMsg) return;
 
   const actor = data?.subject;
@@ -98,10 +109,11 @@ async function onRollSavingThrow(rolls, data) {
 
 
 /**
- * Fires after dnd5e-specific chat message modifications have completed.
- * 
+ * Render or refresh the save tray on a chat message.
+ *
  * @param {ChatMessage5e} message   Chat message being rendered.
- * @param {HTMLElement} html        HTML contents of the message
+ * @param {HTMLElement} html        HTML contents of the message.
+ * @returns {void}
  */
 function onRenderChatMessage(message, html) {
   const content = html?.querySelector?.(".message-content");
@@ -223,12 +235,14 @@ function onRenderChatMessage(message, html) {
 }
 
 /**
- * This function is used to hook into the Chat Log context menu to add additional options to each message
+ * Add save tray context options to chat messages.
  *
- * @param {HTMLElement} html    The Chat Message being rendered
- * @param {object[]} options    The Array of Context Menu options
+ * @function getChatMessageContextOptions
+ * @memberof hookEvents
+ * @param {HTMLElement} html    The chat message being rendered.
+ * @param {object[]} options    The array of context menu options.
  *
- * @returns {object[]}          The extended options Array including new context choices
+ * @returns {object[]}          The extended context menu options.
  */
 function onGetChatMessageContextOptions(html, options) {
   options.push({
@@ -248,16 +262,17 @@ function onGetChatMessageContextOptions(html, options) {
       clearParticipantsFromMessage(msg);
     }
   });
+  return options;
 }
 
 /**
- * Refresh all existing save trays in current Chat Log DOM. 
- * 
- * @param {HTMLElement} html 
- * @returns 
+ * Refresh all save trays already present in the current chat log DOM.
+ *
+ * @param {HTMLElement|null|undefined} html  The chat log root element.
+ * @returns {void}
  */
 function refreshExistingSaveTrays(html) {
-  const nodes = html.querySelectorAll?.("li.chat-message[data-message-id]");
+  const nodes = html?.querySelectorAll?.("li.chat-message[data-message-id]");
   if (!nodes?.length) return;
 
   for (const node of nodes) {

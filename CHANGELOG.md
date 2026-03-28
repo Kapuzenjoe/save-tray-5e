@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.3.2
+
+- Code cleanup and small internal fixes.
+
 ## Version 0.3.1
 
 - Added compatibility with the "Hide NPC Names" mod. Thanks to @ddbrown30. (#3)

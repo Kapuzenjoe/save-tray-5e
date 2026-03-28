@@ -4,16 +4,17 @@ import { setFlagViaGM } from "./queries.mjs";
 /**
  * Attach (or merge) save participants onto a chat message.
  *
- * @param {ChatMessage5e} message
- * @param {Array<Token5e|TokenDocument>} targets
- * @param {object} [meta={}]
- * @param {number|null} [meta.dc=null]
- * @param {string|null} [meta.ability=null]
- * @param {number|null} [meta.total=null]
- * @param {boolean|null} [meta.success=null]
+ * @param {ChatMessage5e} message The chat message to update.
+ * @param {Array<Token5e|TokenDocument>} targets The targeted tokens or token documents.
+ * @param {object} [meta={}] Additional save metadata to merge.
+ * @param {number|null} [meta.dc=null] The save DC.
+ * @param {string|null} [meta.ability=null] The save ability identifier.
+ * @param {number|null} [meta.total=null] The rolled total.
+ * @param {boolean|null} [meta.success=null] Whether the save succeeded.
+ * @returns {Promise<void>}
  */
 export async function attachSaveParticipantsToMessage(message, targets, meta = {}) {
-    if (!message || !Array.isArray(targets) || targets.length === 0) return null;
+    if (!message || !Array.isArray(targets) || !targets.length) return;
 
     const existing = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) ?? { version: 1, participants: [] };
 
@@ -22,7 +23,7 @@ export async function attachSaveParticipantsToMessage(message, targets, meta = {
 
     for (const target of targets) {
         const tokenDoc = target?.document ?? target;
-        const actor = tokenDoc?.actor
+        const actor = tokenDoc?.actor;
         const uuid = actor?.uuid;
         if (!uuid) continue;
 
@@ -62,10 +63,11 @@ export async function attachSaveParticipantsToMessage(message, targets, meta = {
 }
 
 /**
- * Attach dnd5e-style target interactions (click to control/pan, hover highlight) to tray entries.
+ * Attach dnd5e target interactions to save tray entries.
  *
- * @param {ChatMessage5e} message
- * @param {HTMLElement} html
+ * @param {ChatMessage5e} message The chat message whose handlers should be reused.
+ * @param {HTMLElement} html The tray container element.
+ * @returns {void}
  */
 export function activateInteractions(message, html) {
     if (!message || !html) return;
@@ -96,8 +98,9 @@ export function activateInteractions(message, html) {
 /**
  * Activate roll buttons in the save tray.
  *
- * @param {ChatMessage5e} message
- * @param {HTMLElement} html
+ * @param {ChatMessage5e} message The chat message that owns the tray.
+ * @param {HTMLElement} html The tray container element.
+ * @returns {void}
  */
 export function activateSaveRollButtons(message, html) {
     html.querySelectorAll("button.save-tray-5e-roll").forEach(btn => {
@@ -115,9 +118,9 @@ export function activateSaveRollButtons(message, html) {
 /**
  * Trigger a configured saving throw roll from the tray.
  *
- * @param {ChatMessage5e} message
- * @param {string} actorUuid
- * @param {Event} event
+ * @param {ChatMessage5e} message The source chat message.
+ * @param {string} actorUuid The actor UUID to roll for.
+ * @param {Event} event The triggering UI event.
  * @returns {Promise<void>}
  */
 async function rollSaveFromTray(message, actorUuid, event) {
@@ -126,32 +129,25 @@ async function rollSaveFromTray(message, actorUuid, event) {
     if (!ability) return;
 
     const actor = await fromUuid(actorUuid);
-    if (!actor?.rollSavingThrow) return;
+    if (typeof actor?.rollSavingThrow !== "function") return;
 
-    const config = {
+    await actor.rollSavingThrow({
         ability,
         target: Number.isFinite(data?.dc) ? data.dc : undefined,
-        event,
-    };
-
-    const dialog = {};
-
-    const messageData = {
-        flags: {
-            dnd5e: {
-                originatingMessage: message.id,
-            },
-        },
-    };
-
-    await actor.rollSavingThrow(config, dialog, messageData);
+        event
+    }, {}, {
+        data: {
+            "flags.dnd5e.originatingMessage": message.id
+        }
+    });
 }
 
 /**
  * Ensure damage buttons on the originating chat message use save tray participants as user targets.
  *
- * @param {ChatMessage5e} message
- * @param {HTMLElement} html
+ * @param {ChatMessage5e} message The source chat message.
+ * @param {HTMLElement} html The rendered chat message element.
+ * @returns {void}
  */
 export function activateDamageTargetSync(message, html) {
     if (!game.settings.get(MODULE_ID, "damageChat")) return;
@@ -191,8 +187,9 @@ export function activateDamageTargetSync(message, html) {
  * Preset damage multipliers for save successes in the damage application UI.
  * Resolves save data from the originating message (if present).
  *
- * @param {ChatMessage5e} message
- * @param {HTMLElement} html
+ * @param {ChatMessage5e} message The damage roll chat message being rendered.
+ * @param {HTMLElement} html The rendered chat message element.
+ * @returns {void}
  */
 export function activateDamageMultiplierPreset(message, html) {
     if (!game.settings.get(MODULE_ID, "damageChat")) return;
@@ -200,20 +197,19 @@ export function activateDamageMultiplierPreset(message, html) {
     const app = html.querySelector("damage-application");
     if (!app) return;
 
-    const originId = message.getFlag?.("dnd5e", "originatingMessage");
-    const sourceMessage = originId ? game.messages?.get?.(originId) : message;
-
+    const sourceMessage =
+        message.getOriginatingMessage?.()
+        ?? game.messages?.get?.(message.getFlag?.("dnd5e", "originatingMessage"))
+        ?? message;
     const data = sourceMessage?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
     if (!data?.participants?.length) return;
 
-    const roll = message.getFlag?.("dnd5e", "roll") ?? {};
-    const { damageOnSave } = roll;
-
+    const damageOnSave = message.getFlag?.("dnd5e", "roll.damageOnSave");
     const multiplierValue = damageOnSave === "none" ? "0" : damageOnSave === "half" ? "0.5" : null;
     if (!multiplierValue) return;
 
-    const successUuids = data.participants.filter(p => p.success === true).map(p => p.uuid);
-    if (!successUuids.length) return;
+    const successUuids = new Set(data.participants.filter(p => p.success === true).map(p => p.uuid));
+    if (!successUuids.size) return;
 
     const applyPreset = () => {
         const rows = app.querySelectorAll('li.target[data-target-uuid]');
@@ -223,7 +219,7 @@ export function activateDamageMultiplierPreset(message, html) {
             const actorUuid = row.dataset.targetUuid;
             if (!actorUuid) continue;
 
-            if (!actorUuid || !successUuids.includes(actorUuid)) continue;
+            if (!successUuids.has(actorUuid)) continue;
 
             const button = row.querySelector(`button.multiplier-button[value="${multiplierValue}"]`);
             if (!button) continue;
@@ -247,10 +243,11 @@ export function activateDamageMultiplierPreset(message, html) {
 /**
  * Activate delete buttons in the save tray.
  *
- * @param {ChatMessage5e} message
- * @param {HTMLElement} html
+ * @param {ChatMessage5e} message The source chat message.
+ * @param {HTMLElement} html The tray container element.
+ * @returns {void}
  */
-export async function activateDeleteParticipantFromMessage(message, html) {
+export function activateDeleteParticipantFromMessage(message, html) {
     html.querySelectorAll("button.save-tray-5e-delete").forEach(btn => {
         btn.addEventListener("click", ev => {
             ev.preventDefault();
@@ -270,10 +267,10 @@ export async function activateDeleteParticipantFromMessage(message, html) {
 }
 
 /**
- * Clear all participants from message
- * 
- * @param {ChatMessage5e} message 
- * @returns 
+ * Clear all save tray participants from a chat message.
+ *
+ * @param {ChatMessage5e} message The chat message to update.
+ * @returns {Promise<void>}
  */
 export async function clearParticipantsFromMessage(message) {
     if (!message) return;
