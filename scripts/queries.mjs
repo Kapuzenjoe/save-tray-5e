@@ -31,11 +31,6 @@ export function initQueries() {
                 return { ok: false, reason: "no-flag-api" };
             }
 
-            const current = doc.getFlag(scope, key);
-            if (foundry.utils.deepEqual(current, value)) {
-                return { ok: true, changed: false };
-            }
-
             await doc.setFlag(scope, key, value);
             return { ok: true, changed: true };
         } catch (err) {
