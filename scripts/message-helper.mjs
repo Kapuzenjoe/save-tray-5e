@@ -1,65 +1,159 @@
-import { MODULE_ID, SAVE_TRAY_FLAG } from "./constants.mjs";
+import { MODULE_ID, SAVE_TRAY_FLAG, SAVE_TRAY_VERSION } from "./constants.mjs";
 import { setFlagViaGM } from "./queries.mjs";
 
+const DAMAGE_PRESET_STATES = new WeakMap();
+
 /**
- * Attach (or merge) save participants onto a chat message.
+ * Normalize save tray ability data.
  *
- * @param {ChatMessage5e} message The chat message to update.
- * @param {Array<Token5e|TokenDocument>} targets The targeted tokens or token documents.
- * @param {object} [meta={}] Additional save metadata to merge.
- * @param {number|null} [meta.dc=null] The save DC.
- * @param {string|null} [meta.ability=null] The save ability identifier.
- * @param {number|null} [meta.total=null] The rolled total.
- * @param {boolean|null} [meta.success=null] Whether the save succeeded.
- * @returns {Promise<void>}
+ * @param {Iterable<string>|string|null|undefined} abilities Ability identifiers to normalize.
+ * @returns {string[]} Normalized ability identifiers.
  */
-export async function attachSaveParticipantsToMessage(message, targets, meta = {}) {
-    if (!message || !Array.isArray(targets) || !targets.length) return;
+function normalizeAbilities(abilities) {
+    if (!abilities) return [];
 
-    const existing = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) ?? { version: 1, participants: [] };
+    const source = typeof abilities === "string" ? [abilities] : Array.from(abilities);
+    return Array.from(new Set(source.filter(ability => typeof ability === "string" && ability.length)));
+}
 
-    const participants = existing.participants ?? [];
-    const participantsByUuid = new Map(participants.map(p => [p.uuid, p]));
+/**
+ * Normalize recorded save result data.
+ *
+ * @param {object|null|undefined} entry Recorded entry to normalize.
+ * @returns {{actor: string|null, ability: string|null, name: string, success: boolean|null, total: number|null}} Normalized entry.
+ */
+function normalizeRecordedEntry(entry) {
+    return {
+        actor: typeof entry?.actor === "string" && entry.actor.length ? entry.actor : null,
+        ability: typeof entry?.ability === "string" ? entry.ability : null,
+        name: typeof entry?.name === "string" ? entry.name : "",
+        success: typeof entry?.success === "boolean" ? entry.success : null,
+        total: Number.isFinite(entry?.total) ? Number(entry.total) : null
+    };
+}
 
-    for (const target of targets) {
-        const tokenDoc = target?.document ?? target;
-        const actor = tokenDoc?.actor;
-        const uuid = actor?.uuid;
-        if (!uuid) continue;
+/**
+ * Merge a recorded entry into the list, keyed by actor UUID.
+ *
+ * @param {object[]} entries Existing recorded entries.
+ * @param {{actor: string|null, ability: string|null, name: string, success: boolean|null, total: number|null}} entry Entry to merge.
+ * @returns {void}
+ */
+function upsertRecordedEntry(entries, entry) {
+    if (!entry?.actor) return;
+    if (!Number.isFinite(entry?.total) && typeof entry?.success !== "boolean") return;
 
-        const name = tokenDoc.name ?? actor.name;
-        const prior = participantsByUuid.get(uuid);
+    const index = entries.findIndex(existing => existing.actor === entry.actor);
+    if (index === -1) entries.push(entry);
+    else entries[index] = entry;
+}
 
-        const total = Number.isFinite(meta.total)
-            ? meta.total
-            : Number.isFinite(prior?.total)
-                ? prior.total
-                : null;
+/**
+ * Build the persisted save tray flag payload.
+ *
+ * @param {{save: {abilities: string[], dc: number|null}, recorded: object[]}} existing Existing normalized state.
+ * @param {object} [meta={}] Partial data to override.
+ * @param {Iterable<string>|string|null} [meta.abilities] Allowed save abilities.
+ * @param {number|null} [meta.dc] Save DC.
+ * @param {object[]} [meta.recorded] Recorded save results.
+ * @returns {{version: number, save: {abilities: string[], dc: number|null}, recorded: object[]}}
+ */
+function buildSaveTrayFlag(existing, meta = {}) {
+    return {
+        version: SAVE_TRAY_VERSION,
+        save: {
+            abilities: normalizeAbilities(meta.abilities ?? existing.save.abilities),
+            dc: Number.isFinite(meta.dc) ? Number(meta.dc) : existing.save.dc
+        },
+        recorded: meta.recorded ?? existing.recorded
+    };
+}
 
-        const success = typeof meta.success === "boolean"
-            ? meta.success
-            : typeof prior?.success === "boolean"
-                ? prior.success
-                : null;
+/**
+ * Get normalized save tray data from a chat message.
+ *
+ * @param {ChatMessage5e} message The chat message to inspect.
+ * @returns {{version: number, save: {abilities: string[], dc: number|null}, recorded: object[]}}
+ */
+export function getSaveTrayData(message) {
+    const raw = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) ?? {};
+    const recorded = [];
 
-        if (prior) {
-            prior.name = name;
-            prior.total = total;
-            prior.success = success;
-            continue;
-        }
-
-        participantsByUuid.set(uuid, { uuid, name, total, success });
+    for (const entry of Array.isArray(raw?.recorded) ? raw.recorded : []) {
+        upsertRecordedEntry(recorded, normalizeRecordedEntry(entry));
     }
 
-    const next = {
-        version: 1,
-        dc: meta.dc ?? existing.dc ?? null,
-        ability: meta.ability ?? existing.ability ?? null,
-        participants: Array.from(participantsByUuid.values())
+    const dc = raw?.save?.dc ?? null;
+    return {
+        version: SAVE_TRAY_VERSION,
+        save: {
+            abilities: normalizeAbilities(raw?.save?.abilities),
+            dc: Number.isFinite(dc) ? Number(dc) : null
+        },
+        recorded
     };
+}
 
-    await setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next);
+/**
+ * Persist the initial save tray metadata for a chat message.
+ *
+ * @param {ChatMessage5e} message The chat message to update.
+ * @param {object} [meta={}] Additional save metadata to merge.
+ * @param {number|null} [meta.dc=null] The save DC.
+ * @param {Iterable<string>|string|null} [meta.abilities=null] Allowed save abilities.
+ * @returns {Promise<boolean>} True if the flag was updated.
+ */
+export async function initializeSaveTrayMessage(message, meta = {}) {
+    if (!message) return false;
+
+    const existing = getSaveTrayData(message);
+    const next = buildSaveTrayFlag(existing, {
+        abilities: meta.abilities,
+        dc: meta.dc
+    });
+
+    return setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next);
+}
+
+/**
+ * Record the save result for a single actor on a chat message.
+ *
+ * @param {ChatMessage5e} message The chat message to update.
+ * @param {Actor5e} actor The actor whose result should be stored.
+ * @param {object} [meta={}] Additional save metadata to merge.
+ * @param {string|null} [meta.ability=null] The ability identifier used for the roll.
+ * @param {number|null} [meta.dc=null] The save DC.
+ * @param {string|null} [meta.name=null] The display name to store.
+ * @param {number|null} [meta.total=null] The rolled total.
+ * @param {boolean|null} [meta.success=null] Whether the save succeeded.
+ * @returns {Promise<boolean>} True if the flag was updated.
+ */
+export async function recordSaveResult(message, actor, meta = {}) {
+    const uuid = actor?.uuid;
+    if (!message || !uuid) return false;
+
+    const existing = getSaveTrayData(message);
+    const prior = existing.recorded.find(entry => entry.actor === uuid) ?? normalizeRecordedEntry({ actor: uuid });
+    const abilities = normalizeAbilities([
+        ...existing.save.abilities,
+        typeof meta.ability === "string" ? meta.ability : null
+    ]);
+    const nextRecorded = existing.recorded.map(entry => foundry.utils.deepClone(entry));
+    upsertRecordedEntry(nextRecorded, {
+        actor: uuid,
+        ability: typeof meta.ability === "string" ? meta.ability : prior.ability,
+        name: typeof meta.name === "string" ? meta.name : prior.name || actor.name || "",
+        success: typeof meta.success === "boolean" ? meta.success : prior.success,
+        total: Number.isFinite(meta.total) ? Number(meta.total) : prior.total
+    });
+
+    const next = buildSaveTrayFlag(existing, {
+        abilities,
+        dc: meta.dc,
+        recorded: nextRecorded
+    });
+
+    return setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next);
 }
 
 /**
@@ -109,8 +203,11 @@ export function activateSaveRollButtons(message, html) {
             ev.stopPropagation();
 
             const uuid = btn.dataset.saveUuid;
+            const ability = btn.dataset.saveAbility;
             if (!uuid) return;
-            void rollSaveFromTray(message, uuid, ev).catch(err => console.warn(`[${MODULE_ID}] rollSaveFromTray failed`, err));
+            if (!ability) return;
+            void rollSaveFromTray(message, uuid, ability, ev)
+                .catch(err => console.warn(`[${MODULE_ID}] rollSaveFromTray failed`, err));
         });
     });
 }
@@ -120,67 +217,26 @@ export function activateSaveRollButtons(message, html) {
  *
  * @param {ChatMessage5e} message The source chat message.
  * @param {string} actorUuid The actor UUID to roll for.
+ * @param {string} ability The save ability to roll.
  * @param {Event} event The triggering UI event.
  * @returns {Promise<void>}
  */
-async function rollSaveFromTray(message, actorUuid, event) {
-    const data = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-    const ability = data?.ability;
-    if (!ability) return;
+async function rollSaveFromTray(message, actorUuid, ability, event) {
+    const data = getSaveTrayData(message);
+    if (!data.save.abilities.includes(ability)) return;
 
     const actor = await fromUuid(actorUuid);
     if (typeof actor?.rollSavingThrow !== "function") return;
 
     await actor.rollSavingThrow({
         ability,
-        target: Number.isFinite(data?.dc) ? data.dc : undefined,
+        target: Number.isFinite(data.save.dc) ? data.save.dc : undefined,
         event
     }, {}, {
         data: {
             "flags.dnd5e.originatingMessage": message.id
         }
     });
-}
-
-/**
- * Ensure damage buttons on the originating chat message use save tray participants as user targets.
- *
- * @param {ChatMessage5e} message The source chat message.
- * @param {HTMLElement} html The rendered chat message element.
- * @returns {void}
- */
-export function activateDamageTargetSync(message, html) {
-    if (!game.settings.get(MODULE_ID, "damageChat")) return;
-
-    const buttons = html.querySelectorAll("button[data-action]");
-
-    for (const btn of buttons) {
-        const action = btn.dataset.action;
-        if (action !== "rollDamage" && action !== "rollDamageCritical") continue;
-
-        if (btn.dataset.saveTrayTargets === "1") continue;
-        btn.dataset.saveTrayTargets = "1";
-
-        btn.addEventListener(
-            "click",
-            () => {
-                const data = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-                const participants = data?.participants ?? [];
-                if (!participants.length) return;
-
-                const actorUuids = new Set(participants.map(p => p.uuid));
-                if (!actorUuids.size) return;
-
-                const tokenIds = [];
-                for (const token of canvas.tokens.placeables) {
-                    const uuid = token.actor?.uuid;
-                    if (uuid && actorUuids.has(uuid)) tokenIds.push(token.id);
-                }
-                if (tokenIds.length) canvas.tokens.setTargets(tokenIds, { mode: "replace" });
-            },
-            { capture: true }
-        );
-    }
 }
 
 /**
@@ -197,29 +253,32 @@ export function activateDamageMultiplierPreset(message, html) {
     const app = html.querySelector("damage-application");
     if (!app) return;
 
-    const sourceMessage =
-        message.getOriginatingMessage?.()
-        ?? game.messages?.get?.(message.getFlag?.("dnd5e", "originatingMessage"))
-        ?? message;
-    const data = sourceMessage?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-    if (!data?.participants?.length) return;
-
+    const sourceMessage = message.getOriginatingMessage?.() ?? message;
+    const data = getSaveTrayData(sourceMessage);
+    
     const damageOnSave = message.getFlag?.("dnd5e", "roll.damageOnSave");
     const multiplierValue = damageOnSave === "none" ? "0" : damageOnSave === "half" ? "0.5" : null;
     if (!multiplierValue) return;
 
-    const successUuids = new Set(data.participants.filter(p => p.success === true).map(p => p.uuid));
+    const successUuids = new Set(
+        data.recorded
+            .filter(result => result?.success === true && typeof result?.actor === "string")
+            .map(result => result.actor)
+    );
     if (!successUuids.size) return;
 
-    const applyPreset = () => {
-        const rows = app.querySelectorAll('li.target[data-target-uuid]');
-        if (!rows.length) return false;
+    const getTargetingMode = () => {
+        const control = app.querySelector(".target-source-control");
+        if (!control || control.hidden) return "selected";
+        return control.querySelector('[aria-pressed="true"]')?.dataset.mode ?? "targeted";
+    };
 
+    const getRows = () => Array.from(app.querySelectorAll('li.target[data-target-uuid]'));
+
+    const applyPresetToRows = (rows) => {
         for (const row of rows) {
             const actorUuid = row.dataset.targetUuid;
-            if (!actorUuid) continue;
-
-            if (!successUuids.has(actorUuid)) continue;
+            if (!actorUuid || !successUuids.has(actorUuid)) continue;
 
             const button = row.querySelector(`button.multiplier-button[value="${multiplierValue}"]`);
             if (!button) continue;
@@ -227,57 +286,94 @@ export function activateDamageMultiplierPreset(message, html) {
 
             button.click();
         }
-
-        return true;
     };
 
-    if (applyPreset()) return;
+    let state = DAMAGE_PRESET_STATES.get(app);
+    if (!state) {
+        state = {
+            lastMode: null,
+            observerAttached: false,
+            selectedVisible: new Set(),
+            targetedInitialized: false
+        };
+        DAMAGE_PRESET_STATES.set(app, state);
+    }
 
-    const observer = new MutationObserver(() => {
-        if (applyPreset()) observer.disconnect();
-    });
+    const sync = () => {
+        const rows = getRows();
+        if (!rows.length) return;
 
-    observer.observe(app, { childList: true, subtree: true });
+        const mode = getTargetingMode();
+        if (mode !== state.lastMode) {
+            if (mode === "selected") state.selectedVisible = new Set();
+            state.lastMode = mode;
+        }
+
+        if (mode === "targeted") {
+            if (state.targetedInitialized) return;
+            applyPresetToRows(rows);
+            state.targetedInitialized = true;
+            return;
+        }
+
+        const currentVisible = new Set(rows.map(row => row.dataset.targetUuid).filter(uuid => !!uuid));
+        const newlyVisibleRows = rows.filter(row => !state.selectedVisible.has(row.dataset.targetUuid));
+        applyPresetToRows(newlyVisibleRows);
+        state.selectedVisible = currentVisible;
+    };
+
+    if (!state.observerAttached) {
+        const observer = new MutationObserver(sync);
+        observer.observe(app, { childList: true, subtree: true });
+        state.observerAttached = true;
+    }
+
+    sync();
 }
 
 /**
- * Activate delete buttons in the save tray.
+ * Activate delete buttons for recorded save results in the tray.
  *
  * @param {ChatMessage5e} message The source chat message.
  * @param {HTMLElement} html The tray container element.
  * @returns {void}
  */
+/*
 export function activateDeleteParticipantFromMessage(message, html) {
     html.querySelectorAll("button.save-tray-5e-delete").forEach(btn => {
         btn.addEventListener("click", ev => {
             ev.preventDefault();
             ev.stopPropagation();
-            const existing = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-            if (!existing?.participants?.length) return;
+            const existing = getSaveTrayData(message);
+            if (!existing.recorded.length) return;
 
             const uuid = btn.dataset.saveUuid;
             if (!uuid) return;
+            if (!existing.recorded.some(entry => entry.actor === uuid)) return;
 
-            const nextParticipants = existing.participants.filter(p => p.uuid !== uuid);
-            const next = { ...existing, participants: nextParticipants };
+            const next = foundry.utils.deepClone(existing);
+            next.recorded = next.recorded.filter(entry => entry.actor !== uuid);
 
             void setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next).catch(err => console.warn(`[${MODULE_ID}] delete participant failed`, err));
         });
     });
 }
+*/
 
 /**
- * Clear all save tray participants from a chat message.
+ * Clear all recorded save tray results from a chat message.
  *
  * @param {ChatMessage5e} message The chat message to update.
  * @returns {Promise<void>}
  */
+/*
 export async function clearParticipantsFromMessage(message) {
     if (!message) return;
 
-    const existing = message.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-    if (!existing?.participants?.length) return;
+    const existing = getSaveTrayData(message);
+    if (!existing.recorded.length) return;
 
-    const next = { ...existing, participants: [] };
+    const next = { ...existing, recorded: [] };
     await setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next);
 }
+*/

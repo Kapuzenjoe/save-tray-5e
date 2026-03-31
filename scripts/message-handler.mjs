@@ -1,13 +1,49 @@
 import { MODULE_ID, SAVE_TRAY_FLAG } from "./constants.mjs";
 import {
-  attachSaveParticipantsToMessage,
+  getSaveTrayData,
+  initializeSaveTrayMessage,
   activateInteractions,
   activateSaveRollButtons,
-  activateDamageTargetSync,
   activateDamageMultiplierPreset,
-  clearParticipantsFromMessage,
-  activateDeleteParticipantFromMessage
+  recordSaveResult
 } from "./message-helper.mjs";
+
+const SAVE_TRAY_MODES = new Map();
+const SAVE_TRAY_CLASS = "save-tray-5e card-tray targets-tray collapsible";
+
+/**
+ * Insert or replace a tray entry in a UUID-keyed map.
+ *
+ * @param {Map<string, {img: string, name: string, uuid: string}>} entries The target map.
+ * @param {string|null|undefined} uuid The actor UUID.
+ * @param {string|null|undefined} name The display name.
+ * @param {string|null|undefined} img The image path.
+ * @returns {void}
+ */
+function setTrayEntry(entries, uuid, name, img) {
+  if (!uuid) return;
+  entries.set(uuid, {
+    img: img ?? "",
+    name: name ?? "",
+    uuid
+  });
+}
+
+/**
+ * Get the current collapsed state for the save tray.
+ *
+ * Prefer the existing DOM tray when present, otherwise fall back to the
+ * tray state remembered by the dnd5e chat log.
+ *
+ * @param {ChatMessage5e} message The source message.
+ * @param {HTMLElement} content The message content container.
+ * @returns {boolean}
+ */
+function getSaveTrayCollapsedState(message, content) {
+  const tray = content?.querySelector?.(".save-tray-5e");
+  if (tray) return tray.classList.contains("collapsed");
+  return message?._trayStates?.get?.(SAVE_TRAY_CLASS) ?? false;
+}
 
 /**
  * Register the chat-related hooks used by the save tray.
@@ -17,29 +53,14 @@ import {
 export function readySaveTray() {
   Hooks.on("dnd5e.postUseActivity", onPostUseActivity);
   Hooks.on("dnd5e.rollSavingThrow", onRollSavingThrow);
-  // Usage messages rendered through system.getHTML still bypass dnd5e.renderChatMessage in dnd5e 5.3.x.
-  if (!foundry.utils.isNewerVersion("5.3.0", game.system.version)) {
-    Hooks.on("renderChatMessageHTML", onRenderChatMessage);
-  }
-  else {
-    Hooks.on("dnd5e.renderChatMessage", onRenderChatMessage);
-  }
+  Hooks.on("controlToken", onControlToken);
+  Hooks.on("dnd5e.renderChatMessage", onRenderChatMessage);
   Hooks.on("dnd5e.renderChatMessage", activateDamageMultiplierPreset);
-  refreshExistingSaveTrays(ui.chat?.element);
-  console.log(`[${MODULE_ID}] is ready`)
+  refreshRenderedSaveTrays(ui.chat?.element);
 }
 
 /**
- * Register initialization-time hooks used by the save tray.
- *
- * @returns {void}
- */
-export function initSaveTray() {
-  Hooks.on("getChatMessageContextOptions", onGetChatMessageContextOptions);
-}
-
-/**
- * Attach save tray participants when a save activity is used.
+ * Persist save metadata when a save activity is used.
  *
  * @function dnd5e.postUseActivity
  * @memberof hookEvents
@@ -48,19 +69,16 @@ export function initSaveTray() {
  * @param {ActivityUsageResults} results          Final details on the activation.
  * @returns {Promise<void>}
  */
-async function onPostUseActivity(activity, usageConfig, results) {
+async function onPostUseActivity(activity, _usageConfig, results) {
   if (activity?.type !== "save") return;
 
   const srcMsg = results?.message ?? null;
   if (!srcMsg) return;
 
-  const targets = Array.from(game.user?.targets ?? []);
-  if (!targets.length) return;
-
   const dc = activity?.save?.dc?.value ?? null;
-  const ability = activity?.save?.ability?.first?.() ?? null;
+  const abilities = Array.from(activity?.save?.ability ?? []);
 
-  await attachSaveParticipantsToMessage(srcMsg, targets, { dc, ability });
+  await initializeSaveTrayMessage(srcMsg, { dc, abilities });
 }
 
 /**
@@ -81,10 +99,9 @@ async function onRollSavingThrow(rolls, data) {
   const rollMsg = roll.parent;
   if (!rollMsg) return;
 
-  const srcMsg =
-    rollMsg.getOriginatingMessage?.()
-    ?? game.messages?.get?.(rollMsg.getFlag?.("dnd5e", "originatingMessage"));
+  const srcMsg = rollMsg.getOriginatingMessage?.() ?? rollMsg;
   if (!srcMsg) return;
+  if (srcMsg.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) === undefined) return;
 
   const actor = data?.subject;
   if (!actor) return;
@@ -103,10 +120,66 @@ async function onRollSavingThrow(rolls, data) {
       Number.isFinite(dc) ? total >= dc :
         null;
 
-  await attachSaveParticipantsToMessage(srcMsg, [token], { dc, ability, total, success });
+  await recordSaveResult(srcMsg, actor, {
+    ability,
+    dc,
+    name: token.name ?? actor.name ?? "",
+    total,
+    success
+  });
+}
+
+/**
+ * Refresh rendered save trays when the live selected token state changes.
+ *
+ * @returns {void}
+ */
+function onControlToken() {
+  refreshRenderedSaveTrays(ui.chat?.element, { selectedOnly: true });
 }
 
 
+/**
+ * Get the stored save targets snapshot from a message.
+ *
+ * @param {ChatMessage5e} message The source chat message.
+ * @returns {{img: string, name: string, uuid: string}[]} Target descriptors.
+ */
+function getTargetedEntries(message) {
+  const targeted = new Map();
+  for (const target of message?.getFlag?.("dnd5e", "targets") ?? []) {
+    setTrayEntry(targeted, target?.uuid, target?.name, target?.img);
+  }
+  return Array.from(targeted.values());
+}
+
+/**
+ * Get the currently selected token actors.
+ *
+ * @returns {{img: string, name: string, uuid: string}[]} Selected token descriptors.
+ */
+function getSelectedEntries() {
+  const selected = new Map();
+  for (const token of canvas.tokens?.controlled ?? []) {
+    setTrayEntry(selected, token.actor?.uuid, token.name ?? token.actor?.name, token.actor?.img);
+  }
+  return Array.from(selected.values());
+}
+
+/**
+ * Get a localized short label for a save ability.
+ *
+ * @param {string} ability The ability identifier.
+ * @returns {{abbr: string, label: string}} Localized display labels.
+ */
+function getAbilityLabels(ability) {
+  const config = CONFIG.DND5E.abilities?.[ability];
+  const abilityLabel = config?.label ?? config?.abbreviation ?? ability?.toUpperCase?.() ?? "";
+  return {
+    abbr: config?.abbreviation ?? ability?.toUpperCase?.() ?? "",
+    label: game.i18n.format("DND5E.SavePromptTitle", { ability: abilityLabel })
+  };
+}
 
 /**
  * Render or refresh the save tray on a chat message.
@@ -119,15 +192,23 @@ function onRenderChatMessage(message, html) {
   const content = html?.querySelector?.(".message-content");
   if (!content) return;
 
-  const data = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-  if (!data?.participants?.length) {
+  const raw = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
+  if (raw === undefined) {
     content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
     return;
   }
+  const data = getSaveTrayData(message);
+  const recordedByActor = new Map(data.recorded.map(result => [result.actor, result]));
 
-  const buildTray = () => {
+  const buildTray = (collapsed = false) => {
+    const targetedEntries = getTargetedEntries(message);
+    const selectedEntries = getSelectedEntries();
+    const hasTargetedEntries = targetedEntries.length > 0;
+    const initialMode = hasTargetedEntries && SAVE_TRAY_MODES.get(message.id) !== "selected" ? "targeted" : "selected";
+
     const tray = document.createElement("div");
-    tray.classList.add("save-tray-5e", "card-tray", "collapsible");
+    tray.className = SAVE_TRAY_CLASS;
+    tray.classList.toggle("collapsed", collapsed);
 
     const label = document.createElement("label");
     label.classList.add("roboto-upper");
@@ -140,147 +221,187 @@ function onRenderChatMessage(message, html) {
     const body = document.createElement("div");
     body.classList.add("collapsible-content");
 
+    label.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      tray.classList.toggle("collapsed");
+    });
+
+    body.addEventListener("click", event => {
+      event.stopPropagation();
+    });
+
+    const wrapper = document.createElement("div");
+    wrapper.classList.add("wrapper");
+
+    const controls = document.createElement("div");
+    controls.classList.add("target-source-control");
+
+    const targetedButton = document.createElement("button");
+    targetedButton.type = "button";
+    targetedButton.classList.add("unbutton");
+    targetedButton.dataset.mode = "targeted";
+    targetedButton.innerHTML = `
+      <i class="fa-solid fa-bullseye" inert></i> ${game.i18n.localize("DND5E.Tokens.Targeted")}
+    `;
+
+    const selectedButton = document.createElement("button");
+    selectedButton.type = "button";
+    selectedButton.classList.add("unbutton");
+    selectedButton.dataset.mode = "selected";
+    selectedButton.innerHTML = `
+      <i class="fa-solid fa-expand" inert></i> ${game.i18n.localize("DND5E.Tokens.Selected")}
+    `;
+
+    controls.append(targetedButton, selectedButton);
+    controls.hidden = !hasTargetedEntries;
+
     const ul = document.createElement("ul");
-    ul.classList.add("unlist", "evaluation", "wrapper");
+    ul.classList.add("targets", "unlist");
 
-    for (const p of data.participants) {
-      const li = document.createElement("li");
-      li.classList.add("target");
-      li.dataset.saveUuid = p.uuid ?? "";
+    const renderList = (mode) => {
+      SAVE_TRAY_MODES.set(message.id, mode);
+      targetedButton.setAttribute("aria-pressed", String(mode === "targeted"));
+      selectedButton.setAttribute("aria-pressed", String(mode === "selected"));
 
-      const hasResult = Number.isFinite(p.total);
+      const sourceEntries = mode === "targeted" ? targetedEntries : selectedEntries;
+      const rows = [];
 
-      const icon =
-        hasResult ? (p.success === true ? "fa-check" : p.success === false ? "fa-times" : "fa-minus") : "fa-minus";
-
-      const iconClass =
-        hasResult && p.success === true ? "save-tray-5e-success" :
-          hasResult && p.success === false ? "save-tray-5e-failure" :
-            "";
-
-      const actor = fromUuidSync(p.uuid);
-      const canDelete = game.user.isGM || message.isOwner;;
-      const canRoll = game.user.isGM || actor?.isOwner;
-
-      li.innerHTML = canDelete
-        ? `
-          <button type="button" class="save-tray-5e-delete" data-save-uuid="${p.uuid}">
-            <i class="fas fa-trash" inert></i>
-          </button>
-          <i class="fas ${icon} ${iconClass}" inert></i>
-          <div class="name"></div>
-          <div class="ac">${hasResult ? p.total : ""}</div>
-        `
-        : `
-          <i class="fas ${icon} ${iconClass}" inert></i>
-          <div class="name"></div>
-          <div class="ac"></div>
+      for (const entry of sourceEntries) {
+        const result = recordedByActor.get(entry.uuid);
+        const hasResult = Number.isFinite(result?.total);
+        const actor = fromUuidSync(entry.uuid);
+        const canRoll = game.user.isGM || actor?.isOwner;
+        const li = document.createElement("li");
+        li.classList.add("target");
+        li.dataset.saveUuid = entry.uuid;
+        li.innerHTML = `
+          <img class="gold-icon" alt="">
+          <div class="name-stacked">
+            <span class="title"></span>
+            <span class="subtitle"></span>
+          </div>
         `;
 
-      const isHideNPCNamesActive = game.modules?.get?.("hide-npc-names")?.active === true;
-      const actorName = isHideNPCNamesActive && game?.hnn ? game.hnn.getReplacementInfo(actor).displayName : p.name;
-      li.querySelector(".name").textContent = actorName ?? game.i18n.localize("DND5E.Unknown");
+        const img = li.querySelector(".gold-icon");
+        const imagePath = entry.img || actor?.img || "";
+        if (imagePath) img.src = imagePath;
+        else img.hidden = true;
+        img.alt = entry.name || actor?.name || "";
 
-      const right = li.querySelector(".ac");
-      if (hasResult) {
-        right.innerHTML = ` <i class="fa-solid fa-shield-heart" inert></i> <span>${p.total}</span>`;
-      } else {
-        right.innerHTML = canRoll
-          ? `
-            <button type="button" class="save-tray-5e-roll" data-save-uuid="${p.uuid}">
-              <i class="fas fa-dice-d20" inert></i>
-            </button>
-          `
-          : "";
+        const isHideNPCNamesActive = game.modules?.get?.("hide-npc-names")?.active === true;
+        const hiddenName = isHideNPCNamesActive && actor && game?.hnn?.getReplacementInfo
+          ? game.hnn.getReplacementInfo(actor)?.displayName
+          : null;
+        const actorName = hiddenName || result?.name || entry.name;
+        li.querySelector(".title").textContent = actorName ?? game.i18n.localize("DND5E.Unknown");
+
+        if (hasResult) {
+          const value = document.createElement("div");
+          value.classList.add("calculated", "damage");
+          if (result?.success === true) value.classList.add("healing");
+          value.innerHTML = `
+            <i class="fa-solid fa-shield-heart" inert></i>
+            <span>${result.total}</span>
+          `;
+          li.append(value);
+        } else if (canRoll && data.save.abilities.length) {
+          const menu = document.createElement("menu");
+          menu.classList.add("save-buttons", "unlist");
+
+          for (const ability of data.save.abilities) {
+            const { abbr, label } = getAbilityLabels(ability);
+            const item = document.createElement("li");
+            item.innerHTML = `
+              <button type="button" class="save-tray-5e-roll" data-save-uuid="${entry.uuid}" data-save-ability="${ability}"
+                      data-tooltip aria-label="${label}">
+                <i class="fa-solid fa-shield-heart" inert></i>
+                <span>${abbr}</span>
+              </button>
+            `;
+            menu.append(item);
+          }
+
+          li.append(menu);
+        }
+
+        rows.push(li);
       }
 
-      ul.appendChild(li);
+      if (!rows.length) {
+        const empty = document.createElement("li");
+        empty.classList.add("none");
+        empty.textContent = game.i18n.localize(`DND5E.Tokens.None${mode.capitalize()}`);
+        ul.replaceChildren(empty);
+        return;
+      }
+
+      ul.replaceChildren(...rows);
+      activateInteractions(message, ul);
+      activateSaveRollButtons(message, ul);
+    };
+
+    if (hasTargetedEntries) {
+      controls.querySelectorAll("button").forEach(button => {
+        button.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          renderList(event.currentTarget.dataset.mode);
+        });
+      });
     }
 
-    body.appendChild(ul);
+    renderList(initialMode);
+
+    wrapper.append(controls, ul);
+    body.appendChild(wrapper);
     tray.appendChild(label);
     tray.appendChild(body);
 
-    return { tray, ul };
+    return tray;
   };
 
   const applyTray = () => {
+    const collapsed = getSaveTrayCollapsedState(message, content);
     content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
-    const { tray, ul } = buildTray();
-
-    if (message?.type === "usage") {
-      const wrapper = content.querySelector(":scope > div");
-      if (!wrapper || wrapper.classList.contains("chat-card")) return false;
-
-      wrapper.appendChild(tray);
-    }
-    else {
-      content.appendChild(tray);
-    }
-
-    activateInteractions(message, ul);
-    activateSaveRollButtons(message, ul);
-    activateDeleteParticipantFromMessage(message, ul);
-    activateDamageTargetSync(message, content);
+    const tray = buildTray(collapsed);
+    content.appendChild(tray);
     return true;
-  }
+  };
 
-  if (applyTray()) return;
-
-  const observer = new MutationObserver(() => {
-    if (applyTray()) observer.disconnect();
-  });
-
-  observer.observe(content, { childList: true, subtree: true });
+  applyTray();
 }
 
 /**
- * Add save tray context options to chat messages.
+ * Refresh save trays already present in the current chat log DOM.
  *
- * @function getChatMessageContextOptions
- * @memberof hookEvents
- * @param {HTMLElement} html    The chat message being rendered.
- * @param {object[]} options    The array of context menu options.
- *
- * @returns {object[]}          The extended context menu options.
- */
-function onGetChatMessageContextOptions(html, options) {
-  options.push({
-    name: "Save Tray: Clear all targets",
-    icon: '<i class="fas fa-trash"></i>',
-    condition: (li) => {
-      const msg = game.messages.get(li.dataset.messageId)
-      if (!msg) return false;
-      const canEdit = game.user.isGM || msg.isOwner;
-      if (!canEdit) return false;
-      const data = msg.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-      return Boolean(data?.participants?.length);
-    },
-    callback: (li) => {
-      const msg = game.messages.get(li.dataset.messageId)
-      if (!msg) return;
-      clearParticipantsFromMessage(msg);
-    }
-  });
-  return options;
-}
-
-/**
- * Refresh all save trays already present in the current chat log DOM.
- *
- * @param {HTMLElement|null|undefined} html  The chat log root element.
+ * @param {HTMLElement|null|undefined} html The chat log root element.
+ * @param {object} [options={}] Refresh options.
+ * @param {boolean} [options.selectedOnly=false] Only refresh trays that currently show selected targets.
  * @returns {void}
  */
-function refreshExistingSaveTrays(html) {
+function refreshRenderedSaveTrays(html, { selectedOnly = false } = {}) {
   const nodes = html?.querySelectorAll?.("li.chat-message[data-message-id]");
   if (!nodes?.length) return;
 
   for (const node of nodes) {
     const msgId = node.dataset.messageId;
     const msg = game.messages?.get?.(msgId);
+    if (!msg) continue;
 
-    const data = msg.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG);
-    if (!data?.participants?.length) continue;
+    if (msg.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) === undefined) continue;
+
+    if (selectedOnly) {
+      const tray = node.querySelector(".save-tray-5e");
+      if (!tray) continue;
+
+      const controls = tray.querySelector(".target-source-control");
+      if (controls && !controls.hidden) {
+        const selectedPressed =
+          controls.querySelector('[data-mode="selected"]')?.getAttribute("aria-pressed") === "true";
+        if (!selectedPressed) continue;
+      }
+    }
 
     onRenderChatMessage(msg, node);
   }
