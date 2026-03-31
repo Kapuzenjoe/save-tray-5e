@@ -4,7 +4,7 @@
 
 Complete rework of the Save Tray styling and functionality.
 
-- The Save Tray now supports **Targeted** and **Selected** rows, similar to the system behavior. (#4)
+- The Save Tray now supports **Targeted** and **Selected** rows, similar to the system behavior. (#2)
   - **Targeted** creatures are locked in when the chat message is created, matching system behavior.
   - **Selected** creatures update live based on your current selection, also matching system behavior.
   - Rolled saves are stored in a hidden flag. If you reselect a target that has already rolled, its previous roll will be shown again.
