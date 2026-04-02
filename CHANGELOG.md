@@ -9,6 +9,7 @@ Complete rework of the Save Tray styling and functionality.
   - **Selected** creatures update live based on your current selection, also matching system behavior.
   - Rolled saves are stored in a hidden flag. If you reselect a target that has already rolled, its previous roll will be shown again.
   - Clicking the **Damage** button now uses your current targeted/selected creatures and compares them against the save message. If a match is found, the save result is used to determine the damage multiplier.
+  - Non-GM users can only see the Targeted row
 - Added support for **multiple saves**. Each save now gets its own button.
 - Updated styling to better match the system look and feel.
 - Removed the "Trash" button and "Clear all targets option", as it is no longer needed with the new workflow.

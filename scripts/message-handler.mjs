@@ -255,6 +255,7 @@ function onRenderChatMessage(message, html) {
 
     controls.append(targetedButton, selectedButton);
     controls.hidden = !hasTargetedEntries;
+    if(!game.user.isGM) selectedButton.hidden = true;
 
     const ul = document.createElement("ul");
     ul.classList.add("targets", "unlist");
@@ -392,6 +393,7 @@ function refreshRenderedSaveTrays(html, { selectedOnly = false } = {}) {
     if (msg.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) === undefined) continue;
 
     if (selectedOnly) {
+      if(!game.user.isGM) continue
       const tray = node.querySelector(".save-tray-5e");
       if (!tray) continue;
 
