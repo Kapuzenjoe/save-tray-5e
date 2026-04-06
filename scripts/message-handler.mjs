@@ -7,9 +7,13 @@ import {
   activateDamageMultiplierPreset,
   recordSaveResult
 } from "./message-helper.mjs";
+import { getCurrentTargetDescriptors } from "./template-targeting.mjs";
 
 const SAVE_TRAY_MODES = new Map();
 const SAVE_TRAY_CLASS = "save-tray-5e card-tray targets-tray collapsible";
+const REFRESH_SELECTED_SAVE_TRAYS = foundry.utils.debounce(() => {
+  refreshRenderedSaveTrays(ui.chat?.element, { selectedOnly: true });
+}, 50);
 
 /**
  * Insert or replace a tray entry in a UUID-keyed map.
@@ -54,6 +58,7 @@ export function readySaveTray() {
   Hooks.on("dnd5e.postUseActivity", onPostUseActivity);
   Hooks.on("dnd5e.rollSavingThrow", onRollSavingThrow);
   Hooks.on("controlToken", onControlToken);
+  Hooks.on("updateChatMessage", onUpdateChatMessage);
   Hooks.on("dnd5e.renderChatMessage", onRenderChatMessage);
   Hooks.on("dnd5e.renderChatMessage", activateDamageMultiplierPreset);
   refreshRenderedSaveTrays(ui.chat?.element);
@@ -77,6 +82,12 @@ async function onPostUseActivity(activity, _usageConfig, results) {
 
   const dc = activity?.save?.dc?.value ?? null;
   const abilities = Array.from(activity?.save?.ability ?? []);
+
+  // Save activity messages are created before template placement completes.
+  // For template-based saves, refresh the system target snapshot once placement is done.
+  if (activity?.target?.template?.type) {
+    await srcMsg.update({ "flags.dnd5e.targets": getCurrentTargetDescriptors() });
+  }
 
   await initializeSaveTrayMessage(srcMsg, { dc, abilities });
 }
@@ -135,7 +146,36 @@ async function onRollSavingThrow(rolls, data) {
  * @returns {void}
  */
 function onControlToken() {
-  refreshRenderedSaveTrays(ui.chat?.element, { selectedOnly: true });
+  if (!game.user.isGM) return;
+  const html = ui.chat?.element;
+  const hasSelectedTray = html?.querySelector?.(
+    '.save-tray-5e .target-source-control [data-mode="selected"][aria-pressed="true"]'
+  );
+  if (!hasSelectedTray) return;
+  REFRESH_SELECTED_SAVE_TRAYS();
+}
+
+/**
+ * Refresh an already-rendered chat message when relevant save tray inputs change.
+ *
+ * Template-based save activities first render the chat message before the final
+ * target snapshot is known. When either the dnd5e target flags or the module's
+ * save tray flag updates later, rebuild the tray for the existing DOM node.
+ *
+ * @param {ChatMessage5e} message The updated chat message.
+ * @param {object} changed The changed document data.
+ * @returns {void}
+ */
+function onUpdateChatMessage(message, changed) {
+  const changedTargets = foundry.utils.hasProperty(changed, "flags.dnd5e.targets");
+  const changedSaveTray = foundry.utils.hasProperty(changed, `flags.${MODULE_ID}.${SAVE_TRAY_FLAG}`);
+  if (!changedTargets && !changedSaveTray) return;
+
+  const node = ui.chat?.element?.querySelector?.(`li.chat-message[data-message-id="${message.id}"]`);
+  if (!node) return;
+
+  onRenderChatMessage(message, node);
+  activateDamageMultiplierPreset(message, node);
 }
 
 
@@ -202,9 +242,13 @@ function onRenderChatMessage(message, html) {
 
   const buildTray = (collapsed = false) => {
     const targetedEntries = getTargetedEntries(message);
-    const selectedEntries = getSelectedEntries();
+    const selectedEntries = game.user.isGM ? getSelectedEntries() : [];
     const hasTargetedEntries = targetedEntries.length > 0;
-    const initialMode = hasTargetedEntries && SAVE_TRAY_MODES.get(message.id) !== "selected" ? "targeted" : "selected";
+    if (!hasTargetedEntries && !selectedEntries.length && !data.recorded.length) return null;
+    const preferredMode = SAVE_TRAY_MODES.get(message.id);
+    const initialMode = !game.user.isGM || (preferredMode !== "selected" && hasTargetedEntries)
+      ? "targeted"
+      : "selected";
 
     const tray = document.createElement("div");
     tray.className = SAVE_TRAY_CLASS;
@@ -254,13 +298,14 @@ function onRenderChatMessage(message, html) {
     `;
 
     controls.append(targetedButton, selectedButton);
-    controls.hidden = !hasTargetedEntries;
-    if(!game.user.isGM) selectedButton.hidden = true;
+    controls.hidden = !game.user.isGM || !hasTargetedEntries;
+    if (!game.user.isGM) selectedButton.hidden = true;
 
     const ul = document.createElement("ul");
     ul.classList.add("targets", "unlist");
 
     const renderList = (mode) => {
+      if (!game.user.isGM) mode = "targeted";
       SAVE_TRAY_MODES.set(message.id, mode);
       targetedButton.setAttribute("aria-pressed", String(mode === "targeted"));
       selectedButton.setAttribute("aria-pressed", String(mode === "selected"));
@@ -296,6 +341,13 @@ function onRenderChatMessage(message, html) {
           : null;
         const actorName = hiddenName || result?.name || entry.name;
         li.querySelector(".title").textContent = actorName ?? game.i18n.localize("DND5E.Unknown");
+        const subtitle = li.querySelector(".subtitle");
+        if (hasResult && result?.ability) {
+          const { label } = getAbilityLabels(result.ability);
+          subtitle.textContent = label;
+        } else {
+          subtitle.textContent = "";
+        }
 
         if (hasResult) {
           const value = document.createElement("div");
@@ -342,7 +394,7 @@ function onRenderChatMessage(message, html) {
       activateSaveRollButtons(message, ul);
     };
 
-    if (hasTargetedEntries) {
+    if (game.user.isGM && hasTargetedEntries) {
       controls.querySelectorAll("button").forEach(button => {
         button.addEventListener("click", event => {
           event.preventDefault();
@@ -362,15 +414,10 @@ function onRenderChatMessage(message, html) {
     return tray;
   };
 
-  const applyTray = () => {
-    const collapsed = getSaveTrayCollapsedState(message, content);
-    content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
-    const tray = buildTray(collapsed);
-    content.appendChild(tray);
-    return true;
-  };
-
-  applyTray();
+  const collapsed = getSaveTrayCollapsedState(message, content);
+  content.querySelectorAll(".save-tray-5e").forEach(el => el.remove());
+  const tray = buildTray(collapsed);
+  if (tray) content.appendChild(tray);
 }
 
 /**

@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 1.1.0
+
+- Added optional **Auto Template Targeting [experimental]** for supported save templates on Foundry V14.
+- Included various smaller fixes and polish improvements.
+
 ## Version 1.0.0
 
 Complete rework of the Save Tray styling and functionality.

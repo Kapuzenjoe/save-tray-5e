@@ -14,4 +14,13 @@ export function initSettings() {
         type: Boolean,
         default: true,
     });
+
+    game.settings.register(MODULE_ID, "autoTemplateTargeting", {
+        name: "SAVE_TRAY_5E.Settings.autoTemplateTargeting.name",
+        hint: "SAVE_TRAY_5E.Settings.autoTemplateTargeting.hint",
+        scope: "world",
+        config: (game.release?.generation ?? 0) === 14,
+        type: Boolean,
+        default: false,
+    });
 }

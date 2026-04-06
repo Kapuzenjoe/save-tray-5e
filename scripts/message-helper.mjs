@@ -138,7 +138,7 @@ export async function recordSaveResult(message, actor, meta = {}) {
         ...existing.save.abilities,
         typeof meta.ability === "string" ? meta.ability : null
     ]);
-    const nextRecorded = existing.recorded.map(entry => foundry.utils.deepClone(entry));
+    const nextRecorded = existing.recorded.map(entry => ({ ...entry }));
     upsertRecordedEntry(nextRecorded, {
         actor: uuid,
         ability: typeof meta.ability === "string" ? meta.ability : prior.ability,
@@ -227,6 +227,10 @@ async function rollSaveFromTray(message, actorUuid, ability, event) {
 
     const actor = await fromUuid(actorUuid);
     if (typeof actor?.rollSavingThrow !== "function") return;
+    const token = actor?.token?.object ?? actor?.getActiveTokens?.()[0] ?? null;
+    const speaker = token
+        ? ChatMessage.getSpeaker({ actor, scene: canvas.scene, token: token.document })
+        : ChatMessage.getSpeaker({ actor });
 
     await actor.rollSavingThrow({
         ability,
@@ -234,7 +238,7 @@ async function rollSaveFromTray(message, actorUuid, ability, event) {
         event
     }, {}, {
         data: {
-            "flags.dnd5e.originatingMessage": message.id
+            speaker
         }
     });
 }
