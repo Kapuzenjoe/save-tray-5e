@@ -2,8 +2,9 @@
 
 ## Version 1.1.0
 
-- Added optional **Auto Template Targeting [experimental]** for supported save templates on Foundry V14.
-- Included various smaller fixes and polish improvements.
+- Added optional (experimental) automatic template targeting for supported save templates on Foundry V14.
+- Improved how the Save Tray handles selected creatures and template-based saves.
+- Included smaller polish and cleanup improvements.
 
 ## Version 1.0.0
 

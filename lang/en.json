@@ -6,8 +6,8 @@
                 "hint": "Automatically targets Save Tray participants for damage rolls and presets damage multipliers based on save results (e.g., half or none on save)."
             },
             "autoTemplateTargeting": {
-                "name": "Auto Template Targeting [experimental]",
-                "hint": "[experimental] V14 only. While previewing supported save area templates, automatically target matching tokens under the template."
+                "name": "[experimental] Auto Template Targeting",
+                "hint": "V14 only. While previewing supported save area templates, automatically target matching tokens under the template."
             }
         }
     }

@@ -7,7 +7,6 @@ import {
   activateDamageMultiplierPreset,
   recordSaveResult
 } from "./message-helper.mjs";
-import { getCurrentTargetDescriptors } from "./template-targeting.mjs";
 
 const SAVE_TRAY_MODES = new Map();
 const SAVE_TRAY_CLASS = "save-tray-5e card-tray targets-tray collapsible";
@@ -83,10 +82,8 @@ async function onPostUseActivity(activity, _usageConfig, results) {
   const dc = activity?.save?.dc?.value ?? null;
   const abilities = Array.from(activity?.save?.ability ?? []);
 
-  // Save activity messages are created before template placement completes.
-  // For template-based saves, refresh the system target snapshot once placement is done.
   if (activity?.target?.template?.type) {
-    await srcMsg.update({ "flags.dnd5e.targets": getCurrentTargetDescriptors() });
+    await srcMsg.update({ "flags.dnd5e.targets": game.dnd5e.utils.getTargetDescriptors() });
   }
 
   await initializeSaveTrayMessage(srcMsg, { dc, abilities });
@@ -117,9 +114,6 @@ async function onRollSavingThrow(rolls, data) {
   const actor = data?.subject;
   if (!actor) return;
 
-  const token = actor?.token?.object ?? actor?.getActiveTokens?.()[0] ?? null;
-  if (!token) return;
-
   const total = Number.isFinite(roll.total) ? roll.total : null;
   if (total === null) return;
 
@@ -134,7 +128,6 @@ async function onRollSavingThrow(rolls, data) {
   await recordSaveResult(srcMsg, actor, {
     ability,
     dc,
-    name: token.name ?? actor.name ?? "",
     total,
     success
   });
@@ -242,9 +235,8 @@ function onRenderChatMessage(message, html) {
 
   const buildTray = (collapsed = false) => {
     const targetedEntries = getTargetedEntries(message);
-    const selectedEntries = game.user.isGM ? getSelectedEntries() : [];
     const hasTargetedEntries = targetedEntries.length > 0;
-    if (!hasTargetedEntries && !selectedEntries.length && !data.recorded.length) return null;
+    if (!hasTargetedEntries && !(game.user.isGM && getSelectedEntries().length) && !data.recorded.length) return null;
     const preferredMode = SAVE_TRAY_MODES.get(message.id);
     const initialMode = !game.user.isGM || (preferredMode !== "selected" && hasTargetedEntries)
       ? "targeted"
@@ -310,7 +302,9 @@ function onRenderChatMessage(message, html) {
       targetedButton.setAttribute("aria-pressed", String(mode === "targeted"));
       selectedButton.setAttribute("aria-pressed", String(mode === "selected"));
 
-      const sourceEntries = mode === "targeted" ? targetedEntries : selectedEntries;
+      const sourceEntries = mode === "targeted"
+        ? targetedEntries
+        : (game.user.isGM ? getSelectedEntries() : []);
       const rows = [];
 
       for (const entry of sourceEntries) {
@@ -339,7 +333,7 @@ function onRenderChatMessage(message, html) {
         const hiddenName = isHideNPCNamesActive && actor && game?.hnn?.getReplacementInfo
           ? game.hnn.getReplacementInfo(actor)?.displayName
           : null;
-        const actorName = hiddenName || result?.name || entry.name;
+        const actorName = hiddenName || entry.name || actor?.name;
         li.querySelector(".title").textContent = actorName ?? game.i18n.localize("DND5E.Unknown");
         const subtitle = li.querySelector(".subtitle");
         if (hasResult && result?.ability) {

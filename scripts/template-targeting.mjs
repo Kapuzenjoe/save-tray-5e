@@ -127,20 +127,16 @@ function didTemplatePlacementChange(before, after) {
 function collectTemplateTargetIds(activity, template) {
     if (!template?.shape) return [];
 
-    const sourceToken = resolveSourceToken(activity);
+    const sourceToken = activity?.getUsageToken?.()?.object ?? null;
     const targetType = activity?.target?.affects?.type ?? "any";
-    const templateBounds = getTemplateBounds(template);
-    const restrictedPolygons = getRestrictedPolygons(template);
+    const region = getTemplateTargetRegion(template);
+    if (!region) return [];
     const ids = [];
 
     for (const token of canvas.tokens?.placeables ?? []) {
         if (!isCandidateToken(token)) continue;
-        if (templateBounds && token.bounds && !templateBounds.intersects(token.bounds)) continue;
         if (!matchesTargetType(token, targetType, sourceToken)) continue;
-        const intersects = restrictedPolygons
-            ? tokenIntersectsPolygonTree(token, restrictedPolygons)
-            : tokenIntersectsTemplate(token, template);
-        if (!intersects) continue;
+        if (!token.document?.testInsideRegion?.(region)) continue;
         ids.push(token.id);
     }
 
@@ -149,36 +145,35 @@ function collectTemplateTargetIds(activity, template) {
 }
 
 /**
- * Build a temporary move-restricted polygon tree for a preview template.
+ * Build an ephemeral Region document for preview targeting.
  *
  * @param {MeasuredTemplate} template The preview template instance.
- * @returns {foundry.data.PolygonTree|null}
+ * @returns {RegionDocument|null}
  */
-function getRestrictedPolygons(template) {
+function getTemplateTargetRegion(template) {
+    const region = createPreviewRegion(template);
+    if (!region) return null;
+
+    const levels = canvas.level?.id ? [canvas.level.id] : [...(region.levels ?? [])];
+    const restriction = {
+        enabled: true,
+        type: "move",
+        priority: region.restriction?.priority ?? 0
+    };
+
+    if (typeof region._computeShapeConstraints !== "function") return null;
+
+    region.updateSource({ restriction, levels });
+
     try {
-        const region = createPreviewRegion(template);
-        if (!region) return null;
-
-        const levels = canvas.level?.id ? [canvas.level.id] : region.levels;
-        const restriction = {
-            enabled: true,
-            type: "move",
-            priority: region.restriction?.priority ?? 0
-        };
-
-        const restricted = foundry.documents.RegionDocument.fromSource(region.toObject(), { parent: region.parent });
-        if (typeof restricted?._computeShapeConstraints !== "function") return null;
-        if (typeof restricted?._createClipperPolyTree !== "function") return null;
-
-        restricted.updateSource({ restriction, levels });
-        const shapeConstraints = restricted._computeShapeConstraints({
+        const shapeConstraints = region._computeShapeConstraints({
             restriction,
             levels,
-            shapes: restricted.shapes
+            shapes: region.shapes
         });
         if (!shapeConstraints) return null;
-        const clipperPolyTree = restricted._createClipperPolyTree(restricted.shapes, shapeConstraints);
-        return foundry.data.PolygonTree.fromClipperPolyTree(clipperPolyTree);
+        region.updateSource({ _shapeConstraints: shapeConstraints });
+        return region;
     } catch {
         return null;
     }
@@ -221,50 +216,6 @@ function applyPreviewTargets(template, tokenIds) {
 }
 
 /**
- * Snapshot the user's current targeted tokens in the same compact shape used by dnd5e message flags.
- *
- * @returns {{ name: string, img: string, uuid: string, ac: number|null }[]}
- */
-export function getCurrentTargetDescriptors() {
-    return getTargetDescriptorsFromTargets(game.user.targets ?? []);
-}
-
-/**
- * Snapshot arbitrary targets in the same compact shape used by dnd5e message flags.
- *
- * @param {Iterable<Token>|Token[]} targets Targets to normalize.
- * @returns {{ name: string, img: string, uuid: string, ac: number|null }[]}
- */
-function getTargetDescriptorsFromTargets(targets) {
-    const descriptors = new Map();
-    for (const target of targets ?? []) {
-        const actor = target?.actor;
-        const uuid = actor?.uuid;
-        if (!uuid) continue;
-
-        const ac = actor.statuses?.has("coverTotal") ? null : actor.system?.attributes?.ac?.value;
-        descriptors.set(uuid, {
-            name: target.name ?? actor.name ?? "",
-            img: actor.img ?? "",
-            uuid,
-            ac: ac ?? null
-        });
-    }
-    return Array.from(descriptors.values());
-}
-
-/**
- * Resolve the source token for ally/enemy filtering.
- *
- * @param {Activity} activity The source activity.
- * @returns {Token|null}
- */
-function resolveSourceToken(activity) {
-    const actor = activity?.actor;
-    return actor?.token?.object ?? actor?.getActiveTokens?.()[0] ?? null;
-}
-
-/**
  * Determine whether a token is a valid auto-targeting candidate.
  *
  * @param {Token} token The token to evaluate.
@@ -274,34 +225,13 @@ function isCandidateToken(token) {
     const actor = token?.actor;
     if (!actor || !token?.id) return false;
     if (token.document?.hidden) return false;
-    if (isDefeatedToken(token)) return false;
-    if (hasEtherealStatus(token)) return false;
+    if (token.document?.hasStatusEffect?.(CONFIG.specialStatusEffects?.DEFEATED ?? "dead") === true || token.combatant?.isDefeated === true) return false;
+    if (token.document?.hasStatusEffect?.("ethereal") === true || token.actor?.statuses?.has?.("ethereal") === true) return false;
 
     const hpMax = Number(actor.system?.attributes?.hp?.max);
     if (Number.isFinite(hpMax) && (hpMax <= 0)) return false;
 
     return true;
-}
-
-/**
- * Determine whether the token is defeated/dead.
- *
- * @param {Token} token The token to evaluate.
- * @returns {boolean}
- */
-function isDefeatedToken(token) {
-    const defeatedStatus = CONFIG.specialStatusEffects?.DEFEATED ?? "dead";
-    return token.document?.hasStatusEffect?.(defeatedStatus) === true || token.combatant?.isDefeated === true;
-}
-
-/**
- * Determine whether the token has the Ethereal status.
- *
- * @param {Token} token The token to evaluate.
- * @returns {boolean}
- */
-function hasEtherealStatus(token) {
-    return token.document?.hasStatusEffect?.("ethereal") === true || token.actor?.statuses?.has?.("ethereal") === true;
 }
 
 /**
@@ -332,43 +262,4 @@ function matchesTargetType(token, targetType, sourceToken) {
         default:
             return false;
     }
-}
-
-/**
- * Determine whether any of a token's containment test points fall within the template.
- *
- * @param {Token} token The token to test.
- * @param {MeasuredTemplate} template The preview template.
- * @returns {boolean}
- */
-function tokenIntersectsTemplate(token, template) {
-    const points = token.document?.getContainmentTestPoints?.() ?? [];
-    return points.some(point => template.testPoint(point));
-}
-
-/**
- * Determine whether any of a token's containment test points fall within a polygon tree.
- *
- * @param {Token} token The token to test.
- * @param {foundry.data.PolygonTree} polygonTree The polygon tree to test against.
- * @returns {boolean}
- */
-function tokenIntersectsPolygonTree(token, polygonTree) {
-    const points = token.document?.getContainmentTestPoints?.() ?? [];
-    return points.some(point => polygonTree.testPoint(point, 0.75));
-}
-
-/**
- * Compute template bounds in scene coordinates.
- *
- * @param {MeasuredTemplate} template The preview template.
- * @returns {PIXI.Rectangle|null}
- */
-function getTemplateBounds(template) {
-    if (!template?.shape) return null;
-
-    const bounds = template.shape.getBounds();
-    bounds.x += template.document?.x ?? 0;
-    bounds.y += template.document?.y ?? 0;
-    return bounds;
 }

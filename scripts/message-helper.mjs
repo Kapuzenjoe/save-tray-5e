@@ -20,13 +20,12 @@ function normalizeAbilities(abilities) {
  * Normalize recorded save result data.
  *
  * @param {object|null|undefined} entry Recorded entry to normalize.
- * @returns {{actor: string|null, ability: string|null, name: string, success: boolean|null, total: number|null}} Normalized entry.
+ * @returns {{actor: string|null, ability: string|null, success: boolean|null, total: number|null}} Normalized entry.
  */
 function normalizeRecordedEntry(entry) {
     return {
         actor: typeof entry?.actor === "string" && entry.actor.length ? entry.actor : null,
         ability: typeof entry?.ability === "string" ? entry.ability : null,
-        name: typeof entry?.name === "string" ? entry.name : "",
         success: typeof entry?.success === "boolean" ? entry.success : null,
         total: Number.isFinite(entry?.total) ? Number(entry.total) : null
     };
@@ -36,7 +35,7 @@ function normalizeRecordedEntry(entry) {
  * Merge a recorded entry into the list, keyed by actor UUID.
  *
  * @param {object[]} entries Existing recorded entries.
- * @param {{actor: string|null, ability: string|null, name: string, success: boolean|null, total: number|null}} entry Entry to merge.
+ * @param {{actor: string|null, ability: string|null, success: boolean|null, total: number|null}} entry Entry to merge.
  * @returns {void}
  */
 function upsertRecordedEntry(entries, entry) {
@@ -123,7 +122,6 @@ export async function initializeSaveTrayMessage(message, meta = {}) {
  * @param {object} [meta={}] Additional save metadata to merge.
  * @param {string|null} [meta.ability=null] The ability identifier used for the roll.
  * @param {number|null} [meta.dc=null] The save DC.
- * @param {string|null} [meta.name=null] The display name to store.
  * @param {number|null} [meta.total=null] The rolled total.
  * @param {boolean|null} [meta.success=null] Whether the save succeeded.
  * @returns {Promise<boolean>} True if the flag was updated.
@@ -142,7 +140,6 @@ export async function recordSaveResult(message, actor, meta = {}) {
     upsertRecordedEntry(nextRecorded, {
         actor: uuid,
         ability: typeof meta.ability === "string" ? meta.ability : prior.ability,
-        name: typeof meta.name === "string" ? meta.name : prior.name || actor.name || "",
         success: typeof meta.success === "boolean" ? meta.success : prior.success,
         total: Number.isFinite(meta.total) ? Number(meta.total) : prior.total
     });
@@ -305,7 +302,6 @@ export function activateDamageMultiplierPreset(message, html) {
 
     const sync = () => {
         const rows = getRows();
-        if (!rows.length) return;
 
         const mode = getTargetingMode();
         if (mode !== state.lastMode) {
@@ -314,11 +310,14 @@ export function activateDamageMultiplierPreset(message, html) {
         }
 
         if (mode === "targeted") {
+            if (!rows.length) return;
             if (state.targetedInitialized) return;
             applyPresetToRows(rows);
             state.targetedInitialized = true;
             return;
         }
+
+        if (!rows.length) return;
 
         const currentVisible = new Set(rows.map(row => row.dataset.targetUuid).filter(uuid => !!uuid));
         const newlyVisibleRows = rows.filter(row => !state.selectedVisible.has(row.dataset.targetUuid));
@@ -334,50 +333,3 @@ export function activateDamageMultiplierPreset(message, html) {
 
     sync();
 }
-
-/**
- * Activate delete buttons for recorded save results in the tray.
- *
- * @param {ChatMessage5e} message The source chat message.
- * @param {HTMLElement} html The tray container element.
- * @returns {void}
- */
-/*
-export function activateDeleteParticipantFromMessage(message, html) {
-    html.querySelectorAll("button.save-tray-5e-delete").forEach(btn => {
-        btn.addEventListener("click", ev => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            const existing = getSaveTrayData(message);
-            if (!existing.recorded.length) return;
-
-            const uuid = btn.dataset.saveUuid;
-            if (!uuid) return;
-            if (!existing.recorded.some(entry => entry.actor === uuid)) return;
-
-            const next = foundry.utils.deepClone(existing);
-            next.recorded = next.recorded.filter(entry => entry.actor !== uuid);
-
-            void setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next).catch(err => console.warn(`[${MODULE_ID}] delete participant failed`, err));
-        });
-    });
-}
-*/
-
-/**
- * Clear all recorded save tray results from a chat message.
- *
- * @param {ChatMessage5e} message The chat message to update.
- * @returns {Promise<void>}
- */
-/*
-export async function clearParticipantsFromMessage(message) {
-    if (!message) return;
-
-    const existing = getSaveTrayData(message);
-    if (!existing.recorded.length) return;
-
-    const next = { ...existing, recorded: [] };
-    await setFlagViaGM(message.uuid, MODULE_ID, SAVE_TRAY_FLAG, next);
-}
-*/
