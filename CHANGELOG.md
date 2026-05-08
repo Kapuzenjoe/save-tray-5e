@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 1.1.1
+
+- Reorganized the project folder structure for better maintainability.
+
 ## Version 1.1.0
 
 - Added optional (experimental) automatic template targeting for supported save templates on Foundry V14.
