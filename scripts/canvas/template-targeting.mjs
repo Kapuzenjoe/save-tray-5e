@@ -1,4 +1,4 @@
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID } from "../config.mjs";
 
 const TEMPLATE_TARGETING_STATES = new WeakMap();
 const CREATURE_ACTOR_TYPES = new Set(["character", "npc"]);

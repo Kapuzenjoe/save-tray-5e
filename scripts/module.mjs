@@ -1,11 +1,10 @@
 import { initSettings } from "./settings.mjs"
-import { initQueries } from "./queries.mjs";
-import { readySaveTray } from "./message-handler.mjs"
-import { readyTemplateTargeting } from "./template-targeting.mjs";
+import { initTray, readySaveTray } from "./tray/hooks.mjs";
+import { readyTemplateTargeting } from "./canvas/template-targeting.mjs";
 
 Hooks.once("init", () => {
   initSettings();
-  initQueries();
+  initTray();
 });
 
 Hooks.once("ready", () => {

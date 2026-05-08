@@ -1,4 +1,4 @@
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID } from "./config.mjs";
 
 /**
  * Register all module settings.
