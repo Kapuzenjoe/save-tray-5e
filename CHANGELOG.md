@@ -2,6 +2,8 @@
 
 ## Version 1.1.1
 
+- Updated the module.json to remain verified with the latest Foundry VTT V14 version.
+- Code cleanup.
 - Reorganized the project folder structure for better maintainability.
 
 ## Version 1.1.0

@@ -22,7 +22,7 @@
   "compatibility": {
     "minimum": "13",
     "maximum": "14",
-    "verified": "14.360"
+    "verified": "14"
   },
   "esmodules": [
     "scripts/module.mjs"

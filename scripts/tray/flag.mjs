@@ -1,4 +1,4 @@
-import { MODULE_ID, SAVE_TRAY_FLAG, SAVE_TRAY_VERSION } from "../config.mjs";
+import { MODULE_ID, SAVE_TRAY_FLAG } from "../config.mjs";
 
 /**
  * Register module-specific GM query handlers.
@@ -6,7 +6,6 @@ import { MODULE_ID, SAVE_TRAY_FLAG, SAVE_TRAY_VERSION } from "../config.mjs";
  * @returns {void}
  */
 export function initQueries() {
-    CONFIG.queries ??= {};
     if (CONFIG.queries[`${MODULE_ID}.setFlag`]) return;
 
     /**
@@ -26,10 +25,6 @@ export function initQueries() {
 
             const doc = await fromUuid(uuid);
             if (!doc) return { ok: false, reason: "no-document" };
-
-            if (typeof doc.setFlag !== "function" || typeof doc.getFlag !== "function") {
-                return { ok: false, reason: "no-flag-api" };
-            }
 
             await doc.setFlag(scope, key, value);
             return { ok: true, changed: true };
@@ -53,10 +48,6 @@ async function setFlagLocally(uuid, scope, key, value) {
     const doc = await fromUuid(uuid);
     if (!doc) {
         console.warn(`[${MODULE_ID}] no document for uuid ${uuid}`);
-        return false;
-    }
-
-    if (typeof doc.setFlag !== "function" || typeof doc.canUserModify !== "function") {
         return false;
     }
 
@@ -155,11 +146,10 @@ function upsertRecordedEntry(entries, entry) {
  * @param {Iterable<string>|string|null} [meta.abilities] Allowed save abilities.
  * @param {number|null} [meta.dc] Save DC.
  * @param {object[]} [meta.recorded] Recorded save results.
- * @returns {{version: number, save: {abilities: string[], dc: number|null}, recorded: object[]}}
+ * @returns {{save: {abilities: string[], dc: number|null}, recorded: object[]}}
  */
 function buildSaveTrayFlag(existing, meta = {}) {
     return {
-        version: SAVE_TRAY_VERSION,
         save: {
             abilities: normalizeAbilities(meta.abilities ?? existing.save.abilities),
             dc: Number.isFinite(meta.dc) ? Number(meta.dc) : existing.save.dc
@@ -172,7 +162,7 @@ function buildSaveTrayFlag(existing, meta = {}) {
  * Get normalized save tray data from a chat message.
  *
  * @param {ChatMessage5e} message The chat message to inspect.
- * @returns {{version: number, save: {abilities: string[], dc: number|null}, recorded: object[]}}
+ * @returns {{save: {abilities: string[], dc: number|null}, recorded: object[]}}
  */
 export function getSaveTrayData(message) {
     const raw = message?.getFlag?.(MODULE_ID, SAVE_TRAY_FLAG) ?? {};
@@ -184,7 +174,6 @@ export function getSaveTrayData(message) {
 
     const dc = raw?.save?.dc ?? null;
     return {
-        version: SAVE_TRAY_VERSION,
         save: {
             abilities: normalizeAbilities(raw?.save?.abilities),
             dc: Number.isFinite(dc) ? Number(dc) : null
@@ -221,7 +210,6 @@ export async function initializeSaveTrayMessage(message, meta = {}) {
  * @param {Actor5e} actor The actor whose result should be stored.
  * @param {object} [meta={}] Additional save metadata to merge.
  * @param {string|null} [meta.ability=null] The ability identifier used for the roll.
- * @param {number|null} [meta.dc=null] The save DC.
  * @param {number|null} [meta.total=null] The rolled total.
  * @param {boolean|null} [meta.success=null] Whether the save succeeded.
  * @returns {Promise<boolean>} True if the flag was updated.
@@ -232,10 +220,6 @@ export async function recordSaveResult(message, actor, meta = {}) {
 
     const existing = getSaveTrayData(message);
     const prior = existing.recorded.find(entry => entry.actor === uuid) ?? normalizeRecordedEntry({ actor: uuid });
-    const abilities = normalizeAbilities([
-        ...existing.save.abilities,
-        typeof meta.ability === "string" ? meta.ability : null
-    ]);
     const nextRecorded = existing.recorded.map(entry => ({ ...entry }));
     upsertRecordedEntry(nextRecorded, {
         actor: uuid,
@@ -245,8 +229,6 @@ export async function recordSaveResult(message, actor, meta = {}) {
     });
 
     const next = buildSaveTrayFlag(existing, {
-        abilities,
-        dc: meta.dc,
         recorded: nextRecorded
     });
 

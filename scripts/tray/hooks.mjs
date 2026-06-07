@@ -71,7 +71,7 @@ async function onPostUseActivity(activity, _usageConfig, results) {
  */
 async function onRollSavingThrow(rolls, data) {
   const roll = rolls?.[0];
-  if (!roll?._evaluated) return;
+  if (!roll || !Number.isFinite(roll.total)) return;
 
   const rollMsg = roll.parent;
   if (!rollMsg) return;
@@ -83,8 +83,7 @@ async function onRollSavingThrow(rolls, data) {
   const actor = data?.subject;
   if (!actor) return;
 
-  const total = Number.isFinite(roll.total) ? roll.total : null;
-  if (total === null) return;
+  const total = roll.total;
 
   const dc = Number.isFinite(roll.options?.target) ? Number(roll.options.target) : null;
   const ability = typeof data?.ability === "string" ? data.ability : null;
