@@ -2,6 +2,7 @@
 
 ## Version 1.1.1
 
+- Pinned the dnd5e system compatibility to below version 6.0.0, as that release integrates this module's core functionality directly into the system. **This is planned to be the final version of Save Tray 5e.**
 - Updated the module.json to remain verified with the latest Foundry VTT V14 version.
 - Code cleanup.
 - Reorganized the project folder structure for better maintainability.
