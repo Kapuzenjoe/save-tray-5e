@@ -6,6 +6,8 @@
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/peterlankton86911)
 
+> **Note:** This module will not be maintained beyond D&D 5e system version 6.0.0, as that release integrates the core functionality this module provides directly into the system.
+
 **Save Tray 5e** is a lightweight module that enhances D&D 5e saving throw chat messages by adding a compact **Save Tray**, similar to the system’s damage tray for applying damage. It displays **targeted** creatures for all users and **selected** creatures for GMs, along with their save results in a clear, system-like layout.
 
 Targeted creatures are locked in when the chat message is created, while selected creatures update dynamically based on the GM's current selection. Save results are stored internally, allowing previously rolled saves to be restored when a creature is reselected. Players can roll their own saves directly from targeted tray entries they own, and the tray updates automatically as rolls come in.

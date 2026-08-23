@@ -45,7 +45,9 @@
       {
         "id": "dnd5e",
         "type": "system",
-        "compatibility": {}
+        "compatibility": {
+          "maximum": "5.999"
+        }
       }
     ]
   },
